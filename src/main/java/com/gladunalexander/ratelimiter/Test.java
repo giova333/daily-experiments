@@ -10,12 +10,12 @@ public class Test {
                                             .seconds(20)
                                             .build();
 
-        Supplier<RateLimiter> rateLimiterProvider = () -> new SlidingWindowRateLimiter(rateLimiterConfiguration);
+        Supplier<RateLimiter> rateLimiterProvider = () -> new TokenBucketRateLimiter(rateLimiterConfiguration);
         var rateLimiterService = new RateLimiterService(rateLimiterProvider);
 
         for (var i = 0; i < 1000; i++) {
             System.out.println(rateLimiterService.allow(1));
-            Thread.sleep(2000);
+            Thread.sleep(1000);
         }
     }
 }

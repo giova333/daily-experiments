@@ -28,7 +28,9 @@ public class TokenBucketRateLimiter implements RateLimiter {
     private void refill() {
         var currentTimeTs = System.currentTimeMillis();
         var tokensToRefill = ((double) currentTimeTs - lastRefillTsl) / 1000 * refillRate;
-        availableTokens = (int) Math.min(maxTokens, availableTokens + tokensToRefill);
-        lastRefillTsl = currentTimeTs;
+        if ((int) tokensToRefill > 0) {
+            availableTokens = (int) Math.min(maxTokens, availableTokens + tokensToRefill);
+            lastRefillTsl = currentTimeTs;
+        }
     }
 }
