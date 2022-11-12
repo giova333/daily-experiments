@@ -1,13 +1,13 @@
 package com.gladunalexander.ratelimiter;
 
-public class TokeBucketRateLimiter implements RateLimiter {
+public class TokenBucketRateLimiter implements RateLimiter {
 
     private int availableTokens;
     private int maxTokens;
     private long lastRefillTsl;
     private double refillRate;
 
-    public TokeBucketRateLimiter(RateLimiterConfiguration rateLimiterConfiguration) {
+    public TokenBucketRateLimiter(RateLimiterConfiguration rateLimiterConfiguration) {
         availableTokens = rateLimiterConfiguration.getRequests();
         maxTokens = rateLimiterConfiguration.getRequests();
         lastRefillTsl = System.currentTimeMillis();

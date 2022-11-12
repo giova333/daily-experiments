@@ -1,4 +1,4 @@
-package com.gladunalexander.optional;
+package com.gladunalexander.optional.v1;
 
 import java.util.Objects;
 import java.util.function.Consumer;
