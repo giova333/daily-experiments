@@ -11,8 +11,7 @@ public class Record {
     Key key;
     Value value;
 
-    public static Record from(byte[] array) {
-        var byteBuffer = ByteBuffer.wrap(array);
+    public static Record from(ByteBuffer byteBuffer) {
         var header = Header.from(byteBuffer.getInt(), byteBuffer.get(), byteBuffer.getInt());
         var key = new byte[header.getKeySize()];
         var value = new byte[header.getValueSize()];

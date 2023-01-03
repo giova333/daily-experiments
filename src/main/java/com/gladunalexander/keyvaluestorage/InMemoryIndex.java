@@ -6,4 +6,6 @@ public interface InMemoryIndex {
     void put(Key key, RecordMetadata metadata);
 
     Optional<RecordMetadata> get(Key key);
+
+    void destroy();
 }

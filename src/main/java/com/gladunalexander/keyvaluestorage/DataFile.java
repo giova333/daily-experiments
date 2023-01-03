@@ -1,20 +1,21 @@
 package com.gladunalexander.keyvaluestorage;
 
-import java.io.FileNotFoundException;
 import java.io.IOException;
 import java.io.RandomAccessFile;
 import java.nio.ByteBuffer;
 import java.nio.channels.FileChannel;
 import java.util.zip.CRC32;
 
-public class StorageFile {
+public class DataFile {
 
     private static final String FILE_NAME = "kv.data";
 
     private final FileChannel channel;
 
-    public StorageFile() throws FileNotFoundException {
-        this.channel = new RandomAccessFile(FILE_NAME, "rw").getChannel();
+    public DataFile() throws IOException {
+        var randomAccessFile = new RandomAccessFile(FILE_NAME, "rw");
+        randomAccessFile.seek(randomAccessFile.length());
+        this.channel = randomAccessFile.getChannel();
     }
 
     public RecordMetadata write(Key key, Value value) throws IOException {
@@ -41,7 +42,7 @@ public class StorageFile {
             bytesRead = channel.read(valueBuf, currentPosition);
             currentPosition += bytesRead;
         } while (bytesRead != -1 && valueBuf.hasRemaining());
-        var record = Record.from(valueBuf.array());
+        var record = Record.from(valueBuf.position(0));
         verifyCheckSum(record);
         return record;
     }

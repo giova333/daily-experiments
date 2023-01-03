@@ -11,13 +11,13 @@ public class DefaultKeyValueStorage implements KeyValueStorage {
 
     private final ReentrantLock writeLock;
     private final InMemoryIndex index;
-    private final StorageFile file;
+    private final DataFile dataFile;
 
     @SneakyThrows
     public DefaultKeyValueStorage() {
         writeLock = new ReentrantLock();
-        index = new HashInMemoryIndex();
-        file = new StorageFile();
+        index = new PersistentHashIndex();
+        dataFile = new DataFile();
     }
 
     @Override
@@ -25,7 +25,7 @@ public class DefaultKeyValueStorage implements KeyValueStorage {
     public void put(Key key, Value value) {
         writeLock.lock();
         try {
-            var recordMetadata = file.write(key, value);
+            var recordMetadata = dataFile.write(key, value);
             index.put(key, recordMetadata);
         } finally {
             writeLock.unlock();
@@ -35,14 +35,15 @@ public class DefaultKeyValueStorage implements KeyValueStorage {
     @Override
     public Optional<Value> get(Key key) {
         return index.get(key)
-                    .map(unchecked(file::read))
+                    .map(unchecked(dataFile::read))
                     .map(Record::getValue);
     }
 
     @Override
     @SneakyThrows
     public void close() {
-        file.close();
+        dataFile.close();
+        index.destroy();
     }
 
 }
