@@ -25,8 +25,8 @@ public class DefaultKeyValueStorage implements KeyValueStorage {
     public void put(Key key, Value value) {
         writeLock.lock();
         try {
-            var valueMetadata = file.write(key, value);
-            index.put(key, valueMetadata);
+            var recordMetadata = file.write(key, value);
+            index.put(key, recordMetadata);
         } finally {
             writeLock.unlock();
         }
@@ -35,7 +35,8 @@ public class DefaultKeyValueStorage implements KeyValueStorage {
     @Override
     public Optional<Value> get(Key key) {
         return index.get(key)
-                    .map(unchecked(file::read));
+                    .map(unchecked(file::read))
+                    .map(Record::getValue);
     }
 
     @Override
