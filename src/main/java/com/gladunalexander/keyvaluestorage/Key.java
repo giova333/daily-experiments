@@ -20,4 +20,9 @@ public class Key {
     int size() {
         return value.length;
     }
+
+    @Override
+    public String toString() {
+        return new String(value);
+    }
 }

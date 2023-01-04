@@ -2,6 +2,7 @@ package com.gladunalexander.keyvaluestorage;
 
 import lombok.SneakyThrows;
 
+import java.time.Duration;
 import java.util.Optional;
 import java.util.concurrent.locks.ReentrantLock;
 
@@ -22,15 +23,14 @@ public class DefaultKeyValueStorage implements KeyValueStorage {
     }
 
     @Override
-    @SneakyThrows
     public void put(Key key, Value value) {
-        writeLock.lock();
-        try {
-            var recordMetadata = dataFile.write(key, value);
-            index.put(key, recordMetadata);
-        } finally {
-            writeLock.unlock();
-        }
+        put(key, value, -1);
+    }
+
+    @Override
+    public void put(Key key, Value value, Duration ttl) {
+        var ttlTimestamp = System.currentTimeMillis() + ttl.toMillis();
+        put(key, value, ttlTimestamp);
     }
 
     @Override
@@ -38,6 +38,7 @@ public class DefaultKeyValueStorage implements KeyValueStorage {
         return index.get(key)
                     .map(unchecked(dataFile::read))
                     .filter(not(Record::isTombstone))
+                    .filter(not(Record::isExpired))
                     .map(Record::getValue);
     }
 
@@ -51,6 +52,17 @@ public class DefaultKeyValueStorage implements KeyValueStorage {
     public void close() {
         dataFile.close();
         index.destroy();
+    }
+
+    @SneakyThrows
+    private void put(Key key, Value value, long ttl) {
+        writeLock.lock();
+        try {
+            var recordMetadata = dataFile.write(key, value, ttl);
+            index.put(key, recordMetadata);
+        } finally {
+            writeLock.unlock();
+        }
     }
 
 }

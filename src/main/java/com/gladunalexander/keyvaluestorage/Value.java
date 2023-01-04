@@ -26,4 +26,9 @@ public class Value {
     boolean isEmpty() {
         return value.length == 0;
     }
+
+    @Override
+    public String toString() {
+        return new String(value);
+    }
 }

@@ -12,7 +12,7 @@ public class Record {
     Value value;
 
     public static Record from(ByteBuffer byteBuffer) {
-        var header = Header.from(byteBuffer.getInt(), byteBuffer.get(), byteBuffer.getInt());
+        var header = Header.from(byteBuffer.getInt(), byteBuffer.getLong(), byteBuffer.get(), byteBuffer.getInt());
         var key = new byte[header.getKeySize()];
         var value = new byte[header.getValueSize()];
         byteBuffer.get(key);
@@ -26,5 +26,10 @@ public class Record {
 
     public boolean isTombstone() {
         return value.isEmpty();
+    }
+
+    public boolean isExpired() {
+        var ttl = header.getTtl();
+        return ttl != -1 && ttl <= System.currentTimeMillis();
     }
 }

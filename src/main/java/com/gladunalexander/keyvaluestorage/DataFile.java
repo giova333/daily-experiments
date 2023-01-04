@@ -18,9 +18,9 @@ public class DataFile {
         this.channel = randomAccessFile.getChannel();
     }
 
-    public RecordMetadata write(Key key, Value value) throws IOException {
+    public RecordMetadata write(Key key, Value value, long ttl) throws IOException {
         var checkSum = calculateCheckSum(value);
-        var header = Header.from(checkSum, key, value);
+        var header = Header.from(checkSum, ttl, key, value);
 
         var byteBuffers = new ByteBuffer[]{header.toByteBuffer(), key.toByteBuffer(), value.toByteBuffer()};
         var prevPosition = channel.position();

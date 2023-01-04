@@ -1,7 +1,12 @@
 package com.gladunalexander.keyvaluestorage;
 
+import lombok.SneakyThrows;
+
+import java.time.Duration;
+
 public class KeyValueStorageTest {
 
+    @SneakyThrows
     public static void main(String[] args) {
         var keyValueStorage = new DefaultKeyValueStorage();
 
@@ -22,16 +27,29 @@ public class KeyValueStorageTest {
 
         keyValueStorage.delete(Key.of("key3"));
 
-        System.out.println(keyValueStorage.get(Key.of("key1")).map(Value::getValue).map(String::new));
-        System.out.println(keyValueStorage.get(Key.of("key2")).map(Value::getValue).map(String::new));
-        System.out.println(keyValueStorage.get(Key.of("key3")).map(Value::getValue).map(String::new));
+        System.out.println(keyValueStorage.get(Key.of("key1")));
+        System.out.println(keyValueStorage.get(Key.of("key2")));
+        System.out.println(keyValueStorage.get(Key.of("key3")));
 
         keyValueStorage.put(
                 Key.of("key1"),
                 Value.of("value5")
         );
 
-        System.out.println(keyValueStorage.get(Key.of("key1")).map(Value::getValue).map(String::new));
+        System.out.println(keyValueStorage.get(Key.of("key1")));
+
+        keyValueStorage.put(
+                Key.of("key4"),
+                Value.of("value4"),
+                Duration.ofSeconds(5)
+        );
+
+        while (keyValueStorage.get(Key.of("key4")).isPresent()) {
+            System.out.println(keyValueStorage.get(Key.of("key4")));
+            Thread.sleep(1000);
+        }
+        System.out.println(keyValueStorage.get(Key.of("key4")));
+        System.out.println(keyValueStorage.get(Key.of("key1")));
 
         keyValueStorage.close();
     }
