@@ -3,7 +3,7 @@ package com.gladunalexander.keyvaluestorage;
 public class KeyValueStorageTest {
 
     public static void main(String[] args) {
-        var keyValueStorage = KeyValueStorage.create();
+        var keyValueStorage = new DefaultKeyValueStorage();
 
         keyValueStorage.put(
                 Key.of("key1"),
@@ -19,6 +19,8 @@ public class KeyValueStorageTest {
                 Key.of("key3"),
                 Value.of("value3")
         );
+
+        keyValueStorage.delete(Key.of("key3"));
 
         System.out.println(keyValueStorage.get(Key.of("key1")).map(Value::getValue).map(String::new));
         System.out.println(keyValueStorage.get(Key.of("key2")).map(Value::getValue).map(String::new));

@@ -8,9 +8,7 @@ public interface KeyValueStorage {
 
     Optional<Value> get(Key key);
 
-    static KeyValueStorage create() {
-        return new DefaultKeyValueStorage();
-    }
+    void delete(Key key);
 
     void close();
 }

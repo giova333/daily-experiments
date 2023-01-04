@@ -6,6 +6,7 @@ import java.util.Optional;
 import java.util.concurrent.locks.ReentrantLock;
 
 import static io.vavr.API.unchecked;
+import static java.util.function.Predicate.not;
 
 public class DefaultKeyValueStorage implements KeyValueStorage {
 
@@ -36,7 +37,13 @@ public class DefaultKeyValueStorage implements KeyValueStorage {
     public Optional<Value> get(Key key) {
         return index.get(key)
                     .map(unchecked(dataFile::read))
+                    .filter(not(Record::isTombstone))
                     .map(Record::getValue);
+    }
+
+    @Override
+    public void delete(Key key) {
+        index.get(key).ifPresent(__ -> put(key, Value.empty()));
     }
 
     @Override

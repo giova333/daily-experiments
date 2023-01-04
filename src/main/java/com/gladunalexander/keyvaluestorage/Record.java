@@ -23,4 +23,8 @@ public class Record {
                      .value(Value.of(value))
                      .build();
     }
+
+    public boolean isTombstone() {
+        return value.isEmpty();
+    }
 }
