@@ -7,6 +7,7 @@ import java.util.concurrent.Callable;
 public class Future<T> {
 
     private volatile T result;
+    private volatile Exception exception;
     private volatile Status status = Status.CREATED;
     private final Callable<T> task;
 
@@ -30,6 +31,7 @@ public class Future<T> {
         var waitUntil = duration.toMillis() + System.currentTimeMillis();
         while (waitUntil > System.currentTimeMillis() && status != Status.CANCELLED) {
             if (status == Status.DONE) return Optional.ofNullable(result);
+            if (status == Status.FAILED) throw new RuntimeException(exception);
         }
         return Optional.ofNullable(result);
     }
@@ -48,8 +50,13 @@ public class Future<T> {
         return task;
     }
 
+    public void completeExceptionally(Exception e) {
+        this.exception = e;
+        this.status = Status.FAILED;
+    }
+
     enum Status {
-        CREATED, DONE, CANCELLED
+        CREATED, DONE, CANCELLED, FAILED
 
     }
 }

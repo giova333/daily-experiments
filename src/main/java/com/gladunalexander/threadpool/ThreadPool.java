@@ -8,17 +8,26 @@ public class ThreadPool {
 
     private final Thread[] pool;
     private final BlockingQueue<Future<?>> tasks = new LinkedBlockingQueue<>();
+    private boolean acceptNewTasks = true;
 
     public ThreadPool(int size) {
         this.pool = new Thread[size];
         for (var i = 0; i < size; i++) {
             pool[i] = new Thread(() -> {
-                try {
-                    Future<?> future = tasks.take();
-                    Object result = future.getTask().call();
-                    future.done(result);
-                } catch (Exception e) {
-                    throw new RuntimeException(e);
+                var active = true;
+                while (active) {
+                    Future<?> future = null;
+                    try {
+                        future = tasks.take();
+                        Object result = future.getTask().call();
+                        future.done(result);
+                    } catch (InterruptedException e) {
+                        active = false;
+                    } catch (Exception e) {
+                        if (future != null) {
+                            future.completeExceptionally(e);
+                        }
+                    }
                 }
             });
         }
@@ -37,12 +46,22 @@ public class ThreadPool {
 
     public <T> Future<T> submit(Callable<T> callable) {
         var future = Future.of(callable);
-        tasks.add(future);
+        if (acceptNewTasks) {
+            tasks.add(future);
+        }
         return future;
     }
 
-
     public void shutdown() {
+        acceptNewTasks = false;
+        while (!tasks.isEmpty()) {
+            Thread.onSpinWait();
+        }
+        shutdownNow();
+    }
+
+
+    public void shutdownNow() {
         for (Thread thread : pool) {
             thread.interrupt();
         }
