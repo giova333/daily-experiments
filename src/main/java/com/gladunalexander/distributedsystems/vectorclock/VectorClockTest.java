@@ -1,4 +1,4 @@
-package com.gladunalexander.vectorclock;
+package com.gladunalexander.distributedsystems.vectorclock;
 
 public class VectorClockTest {
 

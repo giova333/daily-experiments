@@ -1,4 +1,4 @@
-package com.gladunalexander.vectorclock;
+package com.gladunalexander.distributedsystems.vectorclock;
 
 import lombok.RequiredArgsConstructor;
 import lombok.ToString;
