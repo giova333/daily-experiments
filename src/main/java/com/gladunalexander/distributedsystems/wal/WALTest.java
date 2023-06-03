@@ -11,6 +11,7 @@ public class WALTest {
 
         kvStore.set("name", "Anna");
         kvStore.set("age", "28");
+        kvStore.del("age");
 
         System.out.println(kvStore.get("name"));
         System.out.println(kvStore.get("age"));

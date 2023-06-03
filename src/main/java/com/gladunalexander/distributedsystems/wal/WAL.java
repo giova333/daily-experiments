@@ -12,12 +12,12 @@ import java.util.List;
 
 public class WAL {
 
-    private final RandomAccessFile randomAccessFile;
     private final FileChannel fileChannel;
 
     @SneakyThrows
     private WAL(File file) {
-        this.randomAccessFile = new RandomAccessFile(file, "rw");
+        RandomAccessFile randomAccessFile = new RandomAccessFile(file, "rw");
+        randomAccessFile.seek(randomAccessFile.length());
         this.fileChannel = randomAccessFile.getChannel();
     }
 
@@ -36,29 +36,22 @@ public class WAL {
     public List<WALCommand> readWALEntries() {
         var entries = new ArrayList<WALCommand>();
 
-        fileChannel.position(0);
+        var buffer = fileChannel.map(FileChannel.MapMode.READ_ONLY, 0, fileChannel.size());
 
-        var buffer = ByteBuffer.allocate(1024);
+        while (buffer.hasRemaining()) {
+            byte typeByte = buffer.get();
+            var type = WALCommand.Type.from(typeByte);
 
-        while (fileChannel.read(buffer) > 0) {
-            buffer.flip();
-
-            while (buffer.hasRemaining()) {
-                byte typeByte = buffer.get();
-                var type = WALCommand.Type.from(typeByte);
-
-                switch (type) {
-                    case SET:
-                        entries.add(readSetValueCommand(buffer));
-                        break;
-                    case DEL:
-                        entries.add(readDelValueCommand(buffer));
-                        break;
-                    default:
-                        throw new RuntimeException("Invalid command type found in the WAL.");
-                }
+            switch (type) {
+                case SET:
+                    entries.add(readSetValueCommand(buffer));
+                    break;
+                case DEL:
+                    entries.add(readDelValueCommand(buffer));
+                    break;
+                default:
+                    throw new RuntimeException("Invalid command type found in the WAL.");
             }
-            buffer.clear();
         }
         return entries;
     }
