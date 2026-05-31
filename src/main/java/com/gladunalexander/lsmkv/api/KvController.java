@@ -3,6 +3,7 @@ package com.gladunalexander.lsmkv.api;
 import java.io.IOException;
 import java.io.InputStream;
 import java.nio.charset.StandardCharsets;
+import java.util.Map;
 import java.util.Optional;
 
 import org.springframework.http.ResponseEntity;
@@ -10,6 +11,7 @@ import org.springframework.web.bind.annotation.DeleteMapping;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PathVariable;
 import org.springframework.web.bind.annotation.PutMapping;
+import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RestController;
 
 import com.gladunalexander.lsmkv.engine.Store;
@@ -21,6 +23,8 @@ import com.gladunalexander.lsmkv.engine.Store;
  *   <li>{@code PUT /{key}} with the value in the body — creates or updates, returns 200.</li>
  *   <li>{@code GET /{key}} — returns 200 with the value, or 404 if absent.</li>
  *   <li>{@code DELETE /{key}} — deletes the key (writes a tombstone), returns 200.</li>
+ *   <li>{@code GET /scan?start=&end=} — returns the live key-value pairs in
+ *       {@code [start, end]} as a JSON object, sorted by key.</li>
  * </ul>
  *
  * Keys must be lowercase ASCII; values must be ASCII.
@@ -53,6 +57,12 @@ public class KvController {
         Optional<String> value = store.get(key);
         return value.map(ResponseEntity::ok)
                 .orElseGet(() -> ResponseEntity.notFound().build());
+    }
+
+    @GetMapping("/scan")
+    public ResponseEntity<Map<String, String>> scan(@RequestParam("start") String start,
+                                                     @RequestParam("end") String end) {
+        return ResponseEntity.ok(store.scan(start, end));
     }
 
     @DeleteMapping("/{key}")

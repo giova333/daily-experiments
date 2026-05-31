@@ -1,20 +1,21 @@
 package com.gladunalexander.lsmkv.engine;
 
-import java.util.LinkedHashMap;
-import java.util.Map;
 import java.util.Optional;
+import java.util.SortedMap;
+import java.util.TreeMap;
 
 import com.gladunalexander.lsmkv.sstable.Slot;
 
 /**
  * The in-memory write buffer of the LSM tree.
  *
- * <p>Backed by a hashtable mapping key to value, where a {@code null} value is a tombstone
- * (a logical delete). Week 5 swaps this for an ordered structure to support range scans.
+ * <p>Backed by an ordered map (key to value, {@code null} = tombstone) so keys can be
+ * iterated in sorted order. This both keeps flushed SSTables sorted and supports range
+ * scans. Week 7 swaps this for a trie with the same ordering guarantees.
  */
 public class Memtable {
 
-    private final Map<String, String> entries = new LinkedHashMap<>();
+    private final TreeMap<String, String> entries = new TreeMap<>();
 
     public void put(String key, String value) {
         entries.put(key, value);
@@ -41,8 +42,13 @@ public class Memtable {
         return entries.isEmpty();
     }
 
-    /** Snapshot of the entries (key to value, {@code null} = tombstone) for flushing. */
-    public Map<String, String> entries() {
+    /** Snapshot of all entries (sorted by key, {@code null} = tombstone) for flushing. */
+    public SortedMap<String, String> entries() {
         return entries;
+    }
+
+    /** Entries whose key is within {@code [start, end]} (inclusive), sorted by key. */
+    public SortedMap<String, String> rangeEntries(String start, String end) {
+        return new TreeMap<>(entries.subMap(start, true, end, true));
     }
 }

@@ -11,6 +11,8 @@ import java.util.List;
 import java.util.Map;
 import java.util.Optional;
 import java.util.Set;
+import java.util.SortedMap;
+import java.util.TreeMap;
 
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.context.annotation.Primary;
@@ -95,6 +97,19 @@ public class LsmStore implements Store {
         }
         // A tombstone (or no hit at all) means the key is absent.
         return hit.filter(slot -> !slot.tombstone()).map(Slot::value);
+    }
+
+    @Override
+    public synchronized SortedMap<String, String> scan(String start, String end) {
+        // Merge oldest-to-newest (SSTables in MANIFEST order, then the memtable last) so the
+        // newest record for each key wins; null values (tombstones) shadow older live values.
+        TreeMap<String, String> merged = new TreeMap<>();
+        for (String name : manifest.sstables()) {
+            merged.putAll(new SSTable(dataDir.resolve(name), mapper).entriesInRange(start, end));
+        }
+        merged.putAll(memtable.rangeEntries(start, end));
+        merged.values().removeIf(value -> value == null); // exclude deleted keys
+        return merged;
     }
 
     private void maybeFlush() {

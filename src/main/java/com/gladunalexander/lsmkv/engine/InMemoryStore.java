@@ -2,6 +2,8 @@ package com.gladunalexander.lsmkv.engine;
 
 import java.util.Map;
 import java.util.Optional;
+import java.util.SortedMap;
+import java.util.TreeMap;
 import java.util.concurrent.ConcurrentHashMap;
 
 import org.springframework.stereotype.Component;
@@ -30,5 +32,16 @@ public class InMemoryStore implements Store {
     @Override
     public void delete(String key) {
         data.remove(key);
+    }
+
+    @Override
+    public SortedMap<String, String> scan(String start, String end) {
+        SortedMap<String, String> result = new TreeMap<>();
+        for (Map.Entry<String, String> e : data.entrySet()) {
+            if (e.getKey().compareTo(start) >= 0 && e.getKey().compareTo(end) <= 0) {
+                result.put(e.getKey(), e.getValue());
+            }
+        }
+        return result;
     }
 }

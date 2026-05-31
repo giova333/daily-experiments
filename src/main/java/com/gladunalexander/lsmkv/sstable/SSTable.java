@@ -67,6 +67,18 @@ public class SSTable {
         return load();
     }
 
+    /** Entries whose key is within {@code [start, end]} (inclusive). */
+    public Map<String, String> entriesInRange(String start, String end) {
+        Map<String, String> result = new LinkedHashMap<>();
+        for (Map.Entry<String, String> e : load().entrySet()) {
+            String key = e.getKey();
+            if (key.compareTo(start) >= 0 && key.compareTo(end) <= 0) {
+                result.put(key, e.getValue());
+            }
+        }
+        return result;
+    }
+
     private Map<String, String> load() {
         try {
             if (Files.notExists(file)) {
