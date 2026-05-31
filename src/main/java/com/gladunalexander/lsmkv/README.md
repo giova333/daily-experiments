@@ -13,7 +13,7 @@ one. This is distinct from the sibling `keyvaluestorage` package, which is a Bit
 | Week | Topic | Status |
 |------|-------|--------|
 | 1 | In-memory store (REST PUT/GET) | ✅ |
-| 2 | LSM foundations (memtable, JSON SSTables, MANIFEST) | ⬜ |
+| 2 | LSM foundations (memtable, JSON SSTables, MANIFEST) | ✅ |
 | 3 | Durability (WAL, fsync, crash recovery) | ⬜ |
 | 4 | Deletes, tombstones, compaction | ⬜ |
 | 5 | Range scans (SCAN) | ⬜ |
