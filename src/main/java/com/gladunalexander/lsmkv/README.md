@@ -19,7 +19,7 @@ one. This is distinct from the sibling `keyvaluestorage` package, which is a Bit
 | 5 | Range scans (SCAN) | ✅ |
 | 6 | Leveled compaction | ✅ |
 | 7 | Block-based SSTables, sparse index, Bloom filters, trie memtable | ✅ |
-| 8 | Concurrency | ⬜ |
+| 8 | Concurrency | ✅ |
 
 ## API
 
@@ -35,7 +35,20 @@ Keys are lowercase ASCII; values are ASCII.
 ```bash
 mvn spring-boot:run
 # then, in another shell:
-curl -X PUT localhost:8080/foo -d 'bar'   # -> OK
-curl localhost:8080/foo                   # -> bar
-curl -i localhost:8080/missing            # -> 404
+curl -X PUT localhost:8080/foo -d 'bar'        # -> OK
+curl localhost:8080/foo                        # -> bar
+curl -i localhost:8080/missing                 # -> 404
+curl -X DELETE localhost:8080/foo              # -> OK
+curl 'localhost:8080/scan?start=a&end=z'       # -> {"...":"..."}
 ```
+
+## Configuration
+
+Set via system properties or `application.properties`:
+
+| Property | Default | Meaning |
+|----------|---------|---------|
+| `lsmkv.data-dir` | `lsmkv-data` | directory for SSTables, MANIFEST, and WAL |
+| `lsmkv.memtable-max-entries` | `1024` | flush threshold; also the max entries per level-1+ SSTable |
+| `lsmkv.l0-compaction-trigger` | `4` | level-0 SSTable count that triggers compaction |
+| `lsmkv.level-fanout` | `10` | per-level size budget multiplier |

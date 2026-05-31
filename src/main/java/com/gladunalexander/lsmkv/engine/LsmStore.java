@@ -13,6 +13,10 @@ import java.util.Optional;
 import java.util.Set;
 import java.util.SortedMap;
 import java.util.TreeMap;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
+import java.util.concurrent.TimeUnit;
+import java.util.concurrent.locks.ReentrantReadWriteLock;
 
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.context.annotation.Primary;
@@ -28,18 +32,19 @@ import com.gladunalexander.lsmkv.wal.Wal;
 import jakarta.annotation.PreDestroy;
 
 /**
- * The LSM-tree engine. Week 6 replaces the single-file compaction with leveled compaction.
+ * The LSM-tree engine. Week 8 removes the stop-the-world model so reads and writes proceed
+ * concurrently with flushes and compactions.
  *
- * <p>SSTables are organised into levels. Level 0 holds flushed memtables and may overlap;
- * from level 1 down, SSTables within a level are non-overlapping. When level 0 accumulates
- * too many files (or a deeper level exceeds its size budget), compaction merges that level
- * into the next one, keeping the newest record per key and rebuilding the target level as a
- * set of non-overlapping SSTables. Tombstones are dropped only once they reach the
- * bottom-most level, where no older value can survive them.
+ * <p>A {@link ReentrantReadWriteLock} guards the in-memory state: writers take the write
+ * lock to append to the WAL and the active memtable; readers take the read lock. When the
+ * active memtable fills, it is rotated to an immutable {@code flushing} memtable (and the
+ * WAL is segmented) and a background thread flushes it. The flush and any follow-on
+ * compaction do their heavy IO <em>without</em> holding the lock, taking the write lock only
+ * for the brief commit (updating the MANIFEST and clearing the flushing memtable), so reads
+ * are never blocked for the duration of the IO.
  *
- * <p>Reads consult the memtable, then level 0 newest-to-oldest, then for each deeper level
- * the single SSTable whose key range covers the key. The first source holding the key wins;
- * a tombstone means absent. Compaction is single-threaded and stop-the-world.
+ * <p>Flush and compaction share a single background thread, so they never race each other,
+ * and the background thread is the only mutator of on-disk SSTables.
  */
 @Component
 @Primary
@@ -53,7 +58,15 @@ public class LsmStore implements Store {
 
     private final Manifest manifest;
     private final Wal wal;
-    private Memtable memtable = new Memtable();
+    private final ReentrantReadWriteLock lock = new ReentrantReadWriteLock();
+    private final ExecutorService background = Executors.newSingleThreadExecutor(r -> {
+        Thread t = new Thread(r, "lsmkv-background");
+        t.setDaemon(true);
+        return t;
+    });
+
+    private Memtable active = new Memtable();
+    private Memtable flushing; // immutable snapshot being flushed, or null
 
     public LsmStore(@Value("${lsmkv.data-dir:lsmkv-data}") String dataDir,
                     @Value("${lsmkv.memtable-max-entries:1024}") int memtableMaxEntries,
@@ -77,102 +90,137 @@ public class LsmStore implements Store {
     }
 
     @Override
-    public synchronized void put(String key, String value) {
-        wal.appendPut(key, value); // durable before we acknowledge
-        memtable.put(key, value);
-        maybeFlush();
-    }
-
-    @Override
-    public synchronized void delete(String key) {
-        wal.appendDelete(key);
-        memtable.delete(key); // tombstone
-        maybeFlush();
-    }
-
-    @Override
-    public synchronized Optional<String> get(String key) {
-        Optional<Slot> hit = memtable.lookup(key);
-
-        // Level 0: overlapping SSTables, newest (last) to oldest.
-        List<SSTableMeta> l0 = manifest.level(0);
-        for (int i = l0.size() - 1; i >= 0 && hit.isEmpty(); i--) {
-            hit = sstable(l0.get(i)).lookup(key);
+    public void put(String key, String value) {
+        lock.writeLock().lock();
+        try {
+            wal.appendPut(key, value); // durable before we acknowledge
+            active.put(key, value);
+            maybeRotate();
+        } finally {
+            lock.writeLock().unlock();
         }
+    }
 
-        // Deeper levels: at most one non-overlapping SSTable per level covers the key.
-        for (int n = 1; n <= manifest.maxLevel() && hit.isEmpty(); n++) {
-            for (SSTableMeta meta : manifest.level(n)) {
-                if (meta.covers(key)) {
-                    hit = sstable(meta).lookup(key);
-                    break;
+    @Override
+    public void delete(String key) {
+        lock.writeLock().lock();
+        try {
+            wal.appendDelete(key);
+            active.delete(key); // tombstone
+            maybeRotate();
+        } finally {
+            lock.writeLock().unlock();
+        }
+    }
+
+    @Override
+    public Optional<String> get(String key) {
+        lock.readLock().lock();
+        try {
+            Optional<Slot> hit = active.lookup(key);
+            if (hit.isEmpty() && flushing != null) {
+                hit = flushing.lookup(key);
+            }
+
+            // Level 0: overlapping SSTables, newest (last) to oldest.
+            List<SSTableMeta> l0 = manifest.level(0);
+            for (int i = l0.size() - 1; i >= 0 && hit.isEmpty(); i--) {
+                hit = sstable(l0.get(i)).lookup(key);
+            }
+            // Deeper levels: at most one non-overlapping SSTable per level covers the key.
+            for (int n = 1; n <= manifest.maxLevel() && hit.isEmpty(); n++) {
+                for (SSTableMeta meta : manifest.level(n)) {
+                    if (meta.covers(key)) {
+                        hit = sstable(meta).lookup(key);
+                        break;
+                    }
                 }
             }
-        }
 
-        return hit.filter(slot -> !slot.tombstone()).map(Slot::value);
+            return hit.filter(slot -> !slot.tombstone()).map(Slot::value);
+        } finally {
+            lock.readLock().unlock();
+        }
     }
 
     @Override
-    public synchronized SortedMap<String, String> scan(String start, String end) {
-        // Merge oldest-to-newest so the newest record per key wins: deepest levels first,
-        // then level 0 oldest-to-newest, then the memtable.
-        TreeMap<String, String> merged = new TreeMap<>();
-        for (int n = manifest.maxLevel(); n >= 1; n--) {
-            for (SSTableMeta meta : manifest.level(n)) {
+    public SortedMap<String, String> scan(String start, String end) {
+        lock.readLock().lock();
+        try {
+            // Merge oldest-to-newest so the newest record per key wins.
+            TreeMap<String, String> merged = new TreeMap<>();
+            for (int n = manifest.maxLevel(); n >= 1; n--) {
+                for (SSTableMeta meta : manifest.level(n)) {
+                    merged.putAll(sstable(meta).entriesInRange(start, end));
+                }
+            }
+            for (SSTableMeta meta : manifest.level(0)) {
                 merged.putAll(sstable(meta).entriesInRange(start, end));
             }
-        }
-        for (SSTableMeta meta : manifest.level(0)) {
-            merged.putAll(sstable(meta).entriesInRange(start, end));
-        }
-        merged.putAll(memtable.rangeEntries(start, end));
-        merged.values().removeIf(value -> value == null); // exclude deleted keys
-        return merged;
-    }
-
-    private void maybeFlush() {
-        if (memtable.size() >= memtableMaxEntries) {
-            flush();
-        }
-    }
-
-    /** Flushes the memtable to a new level-0 SSTable. Stop-the-world. */
-    private void flush() {
-        if (memtable.isEmpty()) {
-            return;
-        }
-        Map<String, String> entries = memtable.entries(); // sorted by key
-        String minKey = null;
-        String maxKey = null;
-        for (String key : entries.keySet()) {
-            if (minKey == null) {
-                minKey = key;
+            if (flushing != null) {
+                merged.putAll(flushing.rangeEntries(start, end));
             }
-            maxKey = key;
+            merged.putAll(active.rangeEntries(start, end));
+            merged.values().removeIf(value -> value == null); // exclude deleted keys
+            return merged;
+        } finally {
+            lock.readLock().unlock();
         }
-        int id = manifest.nextId();
-        String name = "sst-" + id + ".json";
-        SSTable.write(dataDir.resolve(name), entries);
-        manifest.add(new SSTableMeta(name, 0, minKey, maxKey));
-        memtable = new Memtable();
-        wal.reset(); // the flushed writes are now durable in the SSTable
-        maybeCompact();
     }
 
-    /** Runs leveled compaction until every level is within its budget. Stop-the-world. */
+    /** Rotates the active memtable for background flushing. Caller holds the write lock. */
+    private void maybeRotate() {
+        if (active.size() < memtableMaxEntries || flushing != null) {
+            return; // not full yet, or a flush is still in progress (keep one segment max)
+        }
+        Memtable toFlush = active;
+        flushing = toFlush;
+        active = new Memtable();
+        wal.rotate(); // seal the segment belonging to toFlush, start a fresh one for active
+        background.submit(() -> flushAndCompact(toFlush));
+    }
+
+    /** Background: write the rotated memtable to an SSTable, then run leveled compaction. */
+    private void flushAndCompact(Memtable toFlush) {
+        try {
+            Map<String, String> entries = toFlush.entries(); // sorted, immutable now
+            String minKey = null;
+            String maxKey = null;
+            for (String key : entries.keySet()) {
+                if (minKey == null) {
+                    minKey = key;
+                }
+                maxKey = key;
+            }
+            int id = nextId();
+            String name = "sst-" + id + ".json";
+            SSTable.write(dataDir.resolve(name), entries); // heavy IO, no lock held
+
+            lock.writeLock().lock();
+            try {
+                manifest.add(new SSTableMeta(name, 0, minKey, maxKey));
+                flushing = null;
+                wal.discardOld(); // the flushed writes are now durable in the SSTable
+            } finally {
+                lock.writeLock().unlock();
+            }
+
+            maybeCompact();
+        } catch (RuntimeException e) {
+            // Background failures must not silently strand the flushing memtable.
+            System.err.println("lsmkv background flush failed: " + e);
+        }
+    }
+
+    /** Runs leveled compaction until every level is within its budget. Background thread only. */
     private void maybeCompact() {
         while (true) {
-            if (manifest.level(0).size() >= l0Trigger) {
-                compact(0);
-                continue;
-            }
-            int target = -1;
-            for (int n = 1; n <= manifest.maxLevel(); n++) {
-                if (manifest.level(n).size() > budget(n)) {
-                    target = n;
-                    break;
-                }
+            int target;
+            lock.readLock().lock();
+            try {
+                target = pickCompactionLevel();
+            } finally {
+                lock.readLock().unlock();
             }
             if (target < 0) {
                 return;
@@ -181,12 +229,33 @@ public class LsmStore implements Store {
         }
     }
 
+    private int pickCompactionLevel() {
+        if (manifest.level(0).size() >= l0Trigger) {
+            return 0;
+        }
+        for (int n = 1; n <= manifest.maxLevel(); n++) {
+            if (manifest.level(n).size() > budget(n)) {
+                return n;
+            }
+        }
+        return -1;
+    }
+
     /** Merges level {@code n} into level {@code n + 1}, rebuilding the latter non-overlapping. */
     private void compact(int n) {
-        List<SSTableMeta> lower = manifest.level(n);      // newer
-        List<SSTableMeta> upper = manifest.level(n + 1);  // older
+        List<SSTableMeta> lower;
+        List<SSTableMeta> upper;
+        boolean targetIsBottom;
+        lock.readLock().lock();
+        try {
+            lower = manifest.level(n);
+            upper = manifest.level(n + 1);
+            targetIsBottom = manifest.maxLevel() <= n + 1;
+        } finally {
+            lock.readLock().unlock();
+        }
 
-        // Merge oldest-to-newest: upper level first, then the lower level (oldest-to-newest).
+        // Merge oldest-to-newest (heavy IO, no lock): upper level first, then the lower level.
         TreeMap<String, String> merged = new TreeMap<>();
         for (SSTableMeta meta : upper) {
             merged.putAll(sstable(meta).entries());
@@ -194,22 +263,24 @@ public class LsmStore implements Store {
         for (SSTableMeta meta : lower) {
             merged.putAll(sstable(meta).entries());
         }
-
-        // Tombstones can be discarded only when level n+1 is the bottom-most level.
-        if (manifest.maxLevel() <= n + 1) {
-            merged.values().removeIf(value -> value == null);
+        if (targetIsBottom) {
+            merged.values().removeIf(value -> value == null); // drop tombstones at the bottom
         }
-
         List<SSTableMeta> rebuilt = partitionIntoSstables(merged, n + 1);
 
-        List<SSTableMeta> kept = new ArrayList<>();
-        for (SSTableMeta meta : manifest.all()) {
-            if (meta.level() != n && meta.level() != n + 1) {
-                kept.add(meta);
+        lock.writeLock().lock();
+        try {
+            List<SSTableMeta> kept = new ArrayList<>();
+            for (SSTableMeta meta : manifest.all()) {
+                if (meta.level() != n && meta.level() != n + 1) {
+                    kept.add(meta);
+                }
             }
+            kept.addAll(rebuilt);
+            manifest.replaceAll(kept);
+        } finally {
+            lock.writeLock().unlock();
         }
-        kept.addAll(rebuilt);
-        manifest.replaceAll(kept);
 
         deleteFiles(lower);
         deleteFiles(upper);
@@ -218,7 +289,7 @@ public class LsmStore implements Store {
     /** Splits sorted entries into non-overlapping SSTables of at most {@code memtableMaxEntries}. */
     private List<SSTableMeta> partitionIntoSstables(SortedMap<String, String> entries, int level) {
         List<SSTableMeta> result = new ArrayList<>();
-        int nextId = manifest.nextId();
+        int nextId = nextId();
         TreeMap<String, String> chunk = new TreeMap<>();
         for (Map.Entry<String, String> e : entries.entrySet()) {
             chunk.put(e.getKey(), e.getValue());
@@ -237,6 +308,15 @@ public class LsmStore implements Store {
         String name = "sst-" + id + ".json";
         SSTable.write(dataDir.resolve(name), chunk);
         return new SSTableMeta(name, level, chunk.firstKey(), chunk.lastKey());
+    }
+
+    private int nextId() {
+        lock.readLock().lock();
+        try {
+            return manifest.nextId();
+        } finally {
+            lock.readLock().unlock();
+        }
     }
 
     /** SSTable count a level may hold before it is compacted downward (grows by the fanout). */
@@ -259,11 +339,11 @@ public class LsmStore implements Store {
     }
 
     private void recoverFromWal() {
-        for (Map.Entry<String, String> e : wal.replay().entrySet()) {
+        for (Map.Entry<String, String> e : wal.replayAll().entrySet()) {
             if (e.getValue() == null) {
-                memtable.delete(e.getKey());
+                active.delete(e.getKey());
             } else {
-                memtable.put(e.getKey(), e.getValue());
+                active.put(e.getKey(), e.getValue());
             }
         }
     }
@@ -290,7 +370,15 @@ public class LsmStore implements Store {
     }
 
     @PreDestroy
-    public synchronized void close() {
+    public void close() {
+        background.shutdown();
+        try {
+            if (!background.awaitTermination(30, TimeUnit.SECONDS)) {
+                background.shutdownNow();
+            }
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+        }
         wal.close();
     }
 }
