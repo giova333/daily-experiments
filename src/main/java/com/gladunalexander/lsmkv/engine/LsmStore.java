@@ -142,11 +142,19 @@ public class LsmStore implements Store {
         if (memtable.isEmpty()) {
             return;
         }
-        SortedMap<String, String> entries = memtable.entries();
+        Map<String, String> entries = memtable.entries(); // sorted by key
+        String minKey = null;
+        String maxKey = null;
+        for (String key : entries.keySet()) {
+            if (minKey == null) {
+                minKey = key;
+            }
+            maxKey = key;
+        }
         int id = manifest.nextId();
         String name = "sst-" + id + ".json";
-        SSTable.write(dataDir.resolve(name), entries, mapper);
-        manifest.add(new SSTableMeta(name, 0, entries.firstKey(), entries.lastKey()));
+        SSTable.write(dataDir.resolve(name), entries);
+        manifest.add(new SSTableMeta(name, 0, minKey, maxKey));
         memtable = new Memtable();
         wal.reset(); // the flushed writes are now durable in the SSTable
         maybeCompact();
@@ -227,7 +235,7 @@ public class LsmStore implements Store {
 
     private SSTableMeta writeChunk(SortedMap<String, String> chunk, int level, int id) {
         String name = "sst-" + id + ".json";
-        SSTable.write(dataDir.resolve(name), chunk, mapper);
+        SSTable.write(dataDir.resolve(name), chunk);
         return new SSTableMeta(name, level, chunk.firstKey(), chunk.lastKey());
     }
 
@@ -237,7 +245,7 @@ public class LsmStore implements Store {
     }
 
     private SSTable sstable(SSTableMeta meta) {
-        return new SSTable(dataDir.resolve(meta.filename()), mapper);
+        return new SSTable(dataDir.resolve(meta.filename()));
     }
 
     private void deleteFiles(List<SSTableMeta> metas) {
