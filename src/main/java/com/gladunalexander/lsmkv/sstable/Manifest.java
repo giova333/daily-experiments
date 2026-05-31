@@ -4,7 +4,6 @@ import java.io.IOException;
 import java.io.UncheckedIOException;
 import java.nio.ByteBuffer;
 import java.nio.channels.FileChannel;
-import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.StandardCopyOption;
@@ -12,23 +11,29 @@ import java.nio.file.StandardOpenOption;
 import java.util.ArrayList;
 import java.util.List;
 
+import com.fasterxml.jackson.core.type.TypeReference;
+import com.fasterxml.jackson.databind.ObjectMapper;
+
 /**
- * The MANIFEST is an append-only list of SSTable filenames. It records which SSTables
- * exist and in which order to read them. The file is ordered oldest-first, so the
- * newest SSTable is the last line.
+ * The MANIFEST records which SSTables exist, at which level, and over which key range.
  *
- * <p>Week 3 makes updates atomic (write a temp file, fsync, then atomically rename) so a
- * crash can never leave a half-written MANIFEST.
+ * <p>It is stored as a JSON array of {@link SSTableMeta}, ordered so that within level 0
+ * the newest SSTable is last. Updates are atomic (write a temp file, fsync, then rename) so
+ * a crash can never leave a half-written MANIFEST.
  */
 public class Manifest {
 
     private static final String FILE_NAME = "MANIFEST";
+    private static final TypeReference<List<SSTableMeta>> LIST_TYPE = new TypeReference<>() {
+    };
 
     private final Path path;
-    private final List<String> sstables = new ArrayList<>();
+    private final ObjectMapper mapper;
+    private final List<SSTableMeta> tables = new ArrayList<>();
 
-    public Manifest(Path dataDir) {
+    public Manifest(Path dataDir, ObjectMapper mapper) {
         this.path = dataDir.resolve(FILE_NAME);
+        this.mapper = mapper;
         load();
     }
 
@@ -38,53 +43,68 @@ public class Manifest {
                 Files.createFile(path);
                 return;
             }
-            for (String line : Files.readAllLines(path)) {
-                if (!line.isBlank()) {
-                    sstables.add(line.trim());
-                }
+            byte[] bytes = Files.readAllBytes(path);
+            if (bytes.length > 0) {
+                tables.addAll(mapper.readValue(bytes, LIST_TYPE));
             }
         } catch (IOException e) {
             throw new UncheckedIOException("failed to load MANIFEST at " + path, e);
         }
     }
 
-    /** SSTable filenames, oldest first. */
-    public List<String> sstables() {
-        return List.copyOf(sstables);
+    /** All SSTables, in MANIFEST order. */
+    public List<SSTableMeta> all() {
+        return List.copyOf(tables);
     }
 
-    /** Derives the next SSTable filename so we never reuse an id, even across restarts. */
-    public String nextSstableName() {
-        int maxId = 0;
-        for (String name : sstables) {
-            maxId = Math.max(maxId, idOf(name));
+    /** SSTables at the given level, oldest-first (so level 0 has the newest last). */
+    public List<SSTableMeta> level(int level) {
+        List<SSTableMeta> result = new ArrayList<>();
+        for (SSTableMeta meta : tables) {
+            if (meta.level() == level) {
+                result.add(meta);
+            }
         }
-        return "sst-" + (maxId + 1) + ".json";
+        return result;
     }
 
-    /** Records a newly written SSTable as the newest entry, atomically. */
-    public void append(String sstableName) {
-        sstables.add(sstableName);
+    public int maxLevel() {
+        int max = 0;
+        for (SSTableMeta meta : tables) {
+            max = Math.max(max, meta.level());
+        }
+        return max;
+    }
+
+    /** The next unused SSTable id (numeric part of {@code sst-N.json}). */
+    public int nextId() {
+        int maxId = 0;
+        for (SSTableMeta meta : tables) {
+            maxId = Math.max(maxId, idOf(meta.filename()));
+        }
+        return maxId + 1;
+    }
+
+    /** Records a newly written SSTable, atomically. */
+    public void add(SSTableMeta meta) {
+        tables.add(meta);
         rewriteAtomically();
     }
 
-    /** Replaces the SSTable list (used by compaction) and persists it atomically. */
-    public void replaceAll(List<String> newSstables) {
-        sstables.clear();
-        sstables.addAll(newSstables);
+    /** Replaces the entire SSTable set (used by compaction) and persists it atomically. */
+    public void replaceAll(List<SSTableMeta> newTables) {
+        tables.clear();
+        tables.addAll(newTables);
         rewriteAtomically();
     }
 
     private void rewriteAtomically() {
-        StringBuilder sb = new StringBuilder();
-        for (String name : sstables) {
-            sb.append(name).append('\n');
-        }
         Path tmp = path.resolveSibling(FILE_NAME + ".tmp");
         try {
+            byte[] bytes = mapper.writeValueAsBytes(tables);
             try (FileChannel ch = FileChannel.open(tmp, StandardOpenOption.CREATE,
                     StandardOpenOption.WRITE, StandardOpenOption.TRUNCATE_EXISTING)) {
-                ch.write(ByteBuffer.wrap(sb.toString().getBytes(StandardCharsets.UTF_8)));
+                ch.write(ByteBuffer.wrap(bytes));
                 ch.force(true); // fsync the new contents before swapping it in
             }
             Files.move(tmp, path, StandardCopyOption.ATOMIC_MOVE,

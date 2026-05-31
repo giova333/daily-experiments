@@ -17,7 +17,7 @@ one. This is distinct from the sibling `keyvaluestorage` package, which is a Bit
 | 3 | Durability (WAL, fsync, crash recovery) | ✅ |
 | 4 | Deletes, tombstones, compaction | ✅ |
 | 5 | Range scans (SCAN) | ✅ |
-| 6 | Leveled compaction | ⬜ |
+| 6 | Leveled compaction | ✅ |
 | 7 | Block-based SSTables, sparse index, Bloom filters, trie memtable | ⬜ |
 | 8 | Concurrency | ⬜ |
 
