@@ -2,8 +2,11 @@ package com.gladunalexander.lsmkv.sstable;
 
 import java.io.IOException;
 import java.io.UncheckedIOException;
+import java.nio.ByteBuffer;
+import java.nio.channels.FileChannel;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.nio.file.StandardOpenOption;
 import java.util.LinkedHashMap;
 import java.util.Map;
 import java.util.Optional;
@@ -32,10 +35,15 @@ public class SSTable {
         this.mapper = mapper;
     }
 
-    /** Writes the given entries to a new SSTable file. */
+    /** Writes the given entries to a new SSTable file and fsyncs it to disk. */
     public static void write(Path file, Map<String, String> entries, ObjectMapper mapper) {
         try {
-            mapper.writeValue(file.toFile(), entries);
+            byte[] bytes = mapper.writeValueAsBytes(entries);
+            try (FileChannel ch = FileChannel.open(file, StandardOpenOption.CREATE,
+                    StandardOpenOption.WRITE, StandardOpenOption.TRUNCATE_EXISTING)) {
+                ch.write(ByteBuffer.wrap(bytes));
+                ch.force(true); // fsync so the SSTable is durable before the MANIFEST names it
+            }
         } catch (IOException e) {
             throw new UncheckedIOException("failed to write SSTable " + file, e);
         }

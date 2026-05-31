@@ -2,8 +2,12 @@ package com.gladunalexander.lsmkv.sstable;
 
 import java.io.IOException;
 import java.io.UncheckedIOException;
+import java.nio.ByteBuffer;
+import java.nio.channels.FileChannel;
+import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.nio.file.StandardCopyOption;
 import java.nio.file.StandardOpenOption;
 import java.util.ArrayList;
 import java.util.List;
@@ -13,8 +17,8 @@ import java.util.List;
  * exist and in which order to read them. The file is ordered oldest-first, so the
  * newest SSTable is the last line.
  *
- * <p>Week 2: a simple newline-delimited text file. Week 3 makes updates atomic and adds
- * a startup routine that deletes any on-disk SSTable not listed here.
+ * <p>Week 3 makes updates atomic (write a temp file, fsync, then atomically rename) so a
+ * crash can never leave a half-written MANIFEST.
  */
 public class Manifest {
 
@@ -58,14 +62,35 @@ public class Manifest {
         return "sst-" + (maxId + 1) + ".json";
     }
 
-    /** Records a newly written SSTable as the newest entry. */
+    /** Records a newly written SSTable as the newest entry, atomically. */
     public void append(String sstableName) {
+        sstables.add(sstableName);
+        rewriteAtomically();
+    }
+
+    /** Replaces the SSTable list (used by compaction) and persists it atomically. */
+    public void replaceAll(List<String> newSstables) {
+        sstables.clear();
+        sstables.addAll(newSstables);
+        rewriteAtomically();
+    }
+
+    private void rewriteAtomically() {
+        StringBuilder sb = new StringBuilder();
+        for (String name : sstables) {
+            sb.append(name).append('\n');
+        }
+        Path tmp = path.resolveSibling(FILE_NAME + ".tmp");
         try {
-            Files.writeString(path, sstableName + System.lineSeparator(),
-                    StandardOpenOption.CREATE, StandardOpenOption.APPEND);
-            sstables.add(sstableName);
+            try (FileChannel ch = FileChannel.open(tmp, StandardOpenOption.CREATE,
+                    StandardOpenOption.WRITE, StandardOpenOption.TRUNCATE_EXISTING)) {
+                ch.write(ByteBuffer.wrap(sb.toString().getBytes(StandardCharsets.UTF_8)));
+                ch.force(true); // fsync the new contents before swapping it in
+            }
+            Files.move(tmp, path, StandardCopyOption.ATOMIC_MOVE,
+                    StandardCopyOption.REPLACE_EXISTING);
         } catch (IOException e) {
-            throw new UncheckedIOException("failed to append to MANIFEST", e);
+            throw new UncheckedIOException("failed to rewrite MANIFEST", e);
         }
     }
 
