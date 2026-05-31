@@ -15,7 +15,7 @@ one. This is distinct from the sibling `keyvaluestorage` package, which is a Bit
 | 1 | In-memory store (REST PUT/GET) | ✅ |
 | 2 | LSM foundations (memtable, JSON SSTables, MANIFEST) | ✅ |
 | 3 | Durability (WAL, fsync, crash recovery) | ✅ |
-| 4 | Deletes, tombstones, compaction | ⬜ |
+| 4 | Deletes, tombstones, compaction | ✅ |
 | 5 | Range scans (SCAN) | ⬜ |
 | 6 | Leveled compaction | ⬜ |
 | 7 | Block-based SSTables, sparse index, Bloom filters, trie memtable | ⬜ |
@@ -25,6 +25,7 @@ one. This is distinct from the sibling `keyvaluestorage` package, which is a Bit
 
 - `PUT /{key}` — body is the value; creates or updates; returns `200 OK`.
 - `GET /{key}` — returns `200` + value, or `404` if absent.
+- `DELETE /{key}` — deletes the key (writes a tombstone); returns `200 OK`.
 
 Keys are lowercase ASCII; values are ASCII.
 

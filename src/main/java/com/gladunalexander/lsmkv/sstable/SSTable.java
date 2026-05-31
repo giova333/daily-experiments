@@ -49,9 +49,22 @@ public class SSTable {
         }
     }
 
-    /** Looks up a key in this SSTable, returning empty if it is absent. */
-    public Optional<String> get(String key) {
-        return Optional.ofNullable(load().get(key));
+    /**
+     * Looks up a key in this SSTable. Returns empty if the key is absent here; returns a
+     * tombstone {@link Slot} if the key was deleted (stored as a {@code null} value).
+     */
+    public Optional<Slot> lookup(String key) {
+        Map<String, String> data = load();
+        if (!data.containsKey(key)) {
+            return Optional.empty();
+        }
+        String value = data.get(key);
+        return Optional.of(value == null ? Slot.deleted() : Slot.of(value));
+    }
+
+    /** All entries in this SSTable (key to value, {@code null} = tombstone). Used by compaction. */
+    public Map<String, String> entries() {
+        return load();
     }
 
     private Map<String, String> load() {

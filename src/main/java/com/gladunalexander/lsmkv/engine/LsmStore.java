@@ -6,6 +6,7 @@ import java.nio.file.DirectoryStream;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.HashSet;
+import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
@@ -18,23 +19,23 @@ import org.springframework.stereotype.Component;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.gladunalexander.lsmkv.sstable.Manifest;
 import com.gladunalexander.lsmkv.sstable.SSTable;
+import com.gladunalexander.lsmkv.sstable.Slot;
 import com.gladunalexander.lsmkv.wal.Wal;
 
 import jakarta.annotation.PreDestroy;
 
 /**
- * Week 2: the LSM-tree engine. Week 3 adds durability.
+ * The LSM-tree engine. Week 4 adds deletes, tombstones, and compaction.
  *
- * <p>Writes are appended to a {@link Wal} (and fsynced) <em>before</em> being applied to
- * the in-memory {@link Memtable}, so acknowledged writes survive a crash. When the
- * memtable exceeds a threshold it is flushed, stop-the-world, into an immutable SSTable;
- * the WAL is then reset since its contents are now durable in the SSTable.
+ * <p>Deletes are written as tombstones: a marker that flows through the WAL, the memtable,
+ * and flushes just like a put. A read stops at the first source (memtable, then SSTables
+ * newest-to-oldest) that contains the key; if that record is a tombstone the key is treated
+ * as absent.
  *
- * <p>On startup the engine deletes any dangling SSTable not listed in the {@link Manifest}
- * (a crash between writing the SSTable and updating the MANIFEST) and replays the WAL to
- * rebuild the memtable.
- *
- * <p>Reads consult the memtable first, then SSTables newest-to-oldest.
+ * <p>Compaction merges all SSTables into a single one, keeping the newest record per key
+ * and dropping tombstones, then atomically swaps the MANIFEST and deletes the old files. It
+ * is single-threaded and stop-the-world, triggered once the SSTable count crosses a
+ * threshold.
  */
 @Component
 @Primary
@@ -43,6 +44,7 @@ public class LsmStore implements Store {
     private final Path dataDir;
     private final ObjectMapper mapper;
     private final int memtableMaxEntries;
+    private final int compactionThreshold;
 
     private final Manifest manifest;
     private final Wal wal;
@@ -50,10 +52,12 @@ public class LsmStore implements Store {
 
     public LsmStore(@Value("${lsmkv.data-dir:lsmkv-data}") String dataDir,
                     @Value("${lsmkv.memtable-max-entries:1024}") int memtableMaxEntries,
+                    @Value("${lsmkv.compaction-threshold:4}") int compactionThreshold,
                     ObjectMapper mapper) {
         this.dataDir = Path.of(dataDir);
         this.mapper = mapper;
         this.memtableMaxEntries = memtableMaxEntries;
+        this.compactionThreshold = compactionThreshold;
         try {
             Files.createDirectories(this.dataDir);
         } catch (IOException e) {
@@ -67,29 +71,36 @@ public class LsmStore implements Store {
 
     @Override
     public synchronized void put(String key, String value) {
-        wal.append(key, value); // durable before we acknowledge
+        wal.appendPut(key, value); // durable before we acknowledge
         memtable.put(key, value);
-        if (memtable.size() >= memtableMaxEntries) {
-            flush();
-        }
+        maybeFlush();
+    }
+
+    @Override
+    public synchronized void delete(String key) {
+        wal.appendDelete(key);
+        memtable.delete(key); // tombstone
+        maybeFlush();
     }
 
     @Override
     public synchronized Optional<String> get(String key) {
-        Optional<String> fromMemtable = memtable.get(key);
-        if (fromMemtable.isPresent()) {
-            return fromMemtable;
-        }
-        // Newest SSTable wins, so scan the manifest from newest (last) to oldest (first).
-        List<String> sstables = manifest.sstables();
-        for (int i = sstables.size() - 1; i >= 0; i--) {
-            SSTable sstable = new SSTable(dataDir.resolve(sstables.get(i)), mapper);
-            Optional<String> value = sstable.get(key);
-            if (value.isPresent()) {
-                return value;
+        Optional<Slot> hit = memtable.lookup(key);
+        if (hit.isEmpty()) {
+            // Newest SSTable wins, so scan the manifest from newest (last) to oldest (first).
+            List<String> sstables = manifest.sstables();
+            for (int i = sstables.size() - 1; i >= 0 && hit.isEmpty(); i--) {
+                hit = new SSTable(dataDir.resolve(sstables.get(i)), mapper).lookup(key);
             }
         }
-        return Optional.empty();
+        // A tombstone (or no hit at all) means the key is absent.
+        return hit.filter(slot -> !slot.tombstone()).map(Slot::value);
+    }
+
+    private void maybeFlush() {
+        if (memtable.size() >= memtableMaxEntries) {
+            flush();
+        }
     }
 
     /** Flushes the memtable to a new SSTable. Stop-the-world: callers hold the monitor. */
@@ -102,11 +113,43 @@ public class LsmStore implements Store {
         manifest.append(name);
         memtable = new Memtable();
         wal.reset(); // the flushed writes are now durable in the SSTable
+        if (manifest.sstables().size() >= compactionThreshold) {
+            compact();
+        }
+    }
+
+    /** Merges all SSTables into one, keeping the newest value per key and dropping tombstones. */
+    private void compact() {
+        List<String> sstables = manifest.sstables();
+        if (sstables.size() <= 1) {
+            return;
+        }
+        // Merge oldest-to-newest so later entries (puts or tombstones) overwrite earlier ones.
+        Map<String, String> merged = new LinkedHashMap<>();
+        for (String name : sstables) {
+            merged.putAll(new SSTable(dataDir.resolve(name), mapper).entries());
+        }
+        merged.values().removeIf(value -> value == null); // drop tombstones
+
+        String name = manifest.nextSstableName();
+        SSTable.write(dataDir.resolve(name), merged, mapper);
+        manifest.replaceAll(List.of(name));
+        for (String old : sstables) {
+            try {
+                Files.deleteIfExists(dataDir.resolve(old));
+            } catch (IOException e) {
+                throw new UncheckedIOException("failed to delete compacted SSTable " + old, e);
+            }
+        }
     }
 
     private void recoverFromWal() {
         for (Map.Entry<String, String> e : wal.replay().entrySet()) {
-            memtable.put(e.getKey(), e.getValue());
+            if (e.getValue() == null) {
+                memtable.delete(e.getKey());
+            } else {
+                memtable.put(e.getKey(), e.getValue());
+            }
         }
     }
 

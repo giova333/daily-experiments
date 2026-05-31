@@ -4,11 +4,13 @@ import java.util.LinkedHashMap;
 import java.util.Map;
 import java.util.Optional;
 
+import com.gladunalexander.lsmkv.sstable.Slot;
+
 /**
  * The in-memory write buffer of the LSM tree.
  *
- * <p>Week 2 backs it with a plain hashtable. A later week swaps this for an ordered
- * structure (to support range scans) and eventually a trie.
+ * <p>Backed by a hashtable mapping key to value, where a {@code null} value is a tombstone
+ * (a logical delete). Week 5 swaps this for an ordered structure to support range scans.
  */
 public class Memtable {
 
@@ -18,8 +20,17 @@ public class Memtable {
         entries.put(key, value);
     }
 
-    public Optional<String> get(String key) {
-        return Optional.ofNullable(entries.get(key));
+    public void delete(String key) {
+        entries.put(key, null); // tombstone
+    }
+
+    /** Looks the key up, distinguishing a live value, a tombstone, and absence. */
+    public Optional<Slot> lookup(String key) {
+        if (!entries.containsKey(key)) {
+            return Optional.empty();
+        }
+        String value = entries.get(key);
+        return Optional.of(value == null ? Slot.deleted() : Slot.of(value));
     }
 
     public int size() {
@@ -30,12 +41,8 @@ public class Memtable {
         return entries.isEmpty();
     }
 
-    /** Returns a snapshot view of the entries (key insertion order). */
+    /** Snapshot of the entries (key to value, {@code null} = tombstone) for flushing. */
     public Map<String, String> entries() {
         return entries;
-    }
-
-    public void clear() {
-        entries.clear();
     }
 }

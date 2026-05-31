@@ -26,4 +26,9 @@ public class InMemoryStore implements Store {
     public Optional<String> get(String key) {
         return Optional.ofNullable(data.get(key));
     }
+
+    @Override
+    public void delete(String key) {
+        data.remove(key);
+    }
 }

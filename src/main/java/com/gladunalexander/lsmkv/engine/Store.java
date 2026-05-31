@@ -17,7 +17,12 @@ public interface Store {
     void put(String key, String value);
 
     /**
-     * Returns the value associated with the key, or empty if the key is absent.
+     * Returns the value associated with the key, or empty if the key is absent or deleted.
      */
     Optional<String> get(String key);
+
+    /**
+     * Deletes a key. Subsequent gets return empty until the key is put again.
+     */
+    void delete(String key);
 }

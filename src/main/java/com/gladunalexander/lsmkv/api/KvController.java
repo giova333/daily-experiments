@@ -6,6 +6,7 @@ import java.nio.charset.StandardCharsets;
 import java.util.Optional;
 
 import org.springframework.http.ResponseEntity;
+import org.springframework.web.bind.annotation.DeleteMapping;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PathVariable;
 import org.springframework.web.bind.annotation.PutMapping;
@@ -19,6 +20,7 @@ import com.gladunalexander.lsmkv.engine.Store;
  * <ul>
  *   <li>{@code PUT /{key}} with the value in the body — creates or updates, returns 200.</li>
  *   <li>{@code GET /{key}} — returns 200 with the value, or 404 if absent.</li>
+ *   <li>{@code DELETE /{key}} — deletes the key (writes a tombstone), returns 200.</li>
  * </ul>
  *
  * Keys must be lowercase ASCII; values must be ASCII.
@@ -51,6 +53,15 @@ public class KvController {
         Optional<String> value = store.get(key);
         return value.map(ResponseEntity::ok)
                 .orElseGet(() -> ResponseEntity.notFound().build());
+    }
+
+    @DeleteMapping("/{key}")
+    public ResponseEntity<String> delete(@PathVariable("key") String key) {
+        if (!isLowercaseAscii(key)) {
+            return ResponseEntity.badRequest().body("key must be lowercase ASCII\n");
+        }
+        store.delete(key);
+        return ResponseEntity.ok("OK\n");
     }
 
     private static boolean isLowercaseAscii(String key) {

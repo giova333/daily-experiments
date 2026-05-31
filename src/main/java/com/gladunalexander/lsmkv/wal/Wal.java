@@ -14,9 +14,10 @@ import java.util.zip.CRC32;
  * Write-Ahead Log: an append-only file written <em>before</em> the memtable so that
  * acknowledged writes survive a crash.
  *
- * <p>Each record is {@code [crc32:4][keyLen:4][key][valLen:4][value]} where the CRC32 is
- * computed over the payload (everything after the checksum). {@code fsync} is called after
- * every record so the data reaches stable storage before the write is acknowledged.
+ * <p>Each record is {@code [crc32:4][op:1][keyLen:4][key][valLen:4][value]} where {@code op}
+ * is {@code 0} for a put and {@code 1} for a delete (tombstone), and the CRC32 is computed
+ * over the payload (everything after the checksum). {@code fsync} is called after every
+ * record so the data reaches stable storage before the write is acknowledged.
  *
  * <p>On startup the log is replayed to rebuild the memtable; the first invalid or
  * truncated record (e.g. a torn write from a crash) terminates the replay and its tail is
@@ -25,6 +26,8 @@ import java.util.zip.CRC32;
 public class Wal {
 
     private static final String FILE_NAME = "wal.log";
+    private static final byte OP_PUT = 0;
+    private static final byte OP_DELETE = 1;
 
     private final RandomAccessFile file;
     private final FileChannel channel;
@@ -39,12 +42,21 @@ public class Wal {
     }
 
     /** Appends a put record and fsyncs it to disk before returning. */
-    public synchronized void append(String key, String value) {
+    public synchronized void appendPut(String key, String value) {
+        append(OP_PUT, key, value);
+    }
+
+    /** Appends a delete (tombstone) record and fsyncs it to disk before returning. */
+    public synchronized void appendDelete(String key) {
+        append(OP_DELETE, key, "");
+    }
+
+    private void append(byte op, String key, String value) {
         byte[] k = key.getBytes(StandardCharsets.US_ASCII);
         byte[] v = value.getBytes(StandardCharsets.US_ASCII);
 
-        ByteBuffer payload = ByteBuffer.allocate(4 + k.length + 4 + v.length);
-        payload.putInt(k.length).put(k).putInt(v.length).put(v);
+        ByteBuffer payload = ByteBuffer.allocate(1 + 4 + k.length + 4 + v.length);
+        payload.put(op).putInt(k.length).put(k).putInt(v.length).put(v);
         byte[] payloadBytes = payload.array();
 
         CRC32 crc = new CRC32();
@@ -65,8 +77,9 @@ public class Wal {
     }
 
     /**
-     * Replays the log into an ordered map, stopping at the first invalid/truncated record
-     * and truncating the file so the corrupt tail is discarded.
+     * Replays the log into an ordered map (key to value, {@code null} = tombstone),
+     * stopping at the first invalid/truncated record and truncating the file so the corrupt
+     * tail is discarded.
      */
     public synchronized LinkedHashMap<String, String> replay() {
         LinkedHashMap<String, String> result = new LinkedHashMap<>();
@@ -81,9 +94,10 @@ public class Wal {
             ByteBuffer in = ByteBuffer.wrap(all);
 
             int validEnd = 0;
-            while (in.remaining() >= 8) { // at least checksum + keyLen
+            while (in.remaining() >= 9) { // at least checksum + op + keyLen
                 int recordStart = in.position();
                 int checksum = in.getInt();
+                byte op = in.get();
                 int keyLen = in.getInt();
                 if (keyLen < 0 || in.remaining() < keyLen + 4) {
                     break; // truncated
@@ -102,8 +116,9 @@ public class Wal {
                 if ((int) crc.getValue() != checksum) {
                     break; // corrupt record; discard this one and the rest
                 }
-                result.put(new String(k, StandardCharsets.US_ASCII),
-                        new String(v, StandardCharsets.US_ASCII));
+                String key = new String(k, StandardCharsets.US_ASCII);
+                result.put(key, op == OP_DELETE ? null
+                        : new String(v, StandardCharsets.US_ASCII));
                 validEnd = in.position();
             }
 
