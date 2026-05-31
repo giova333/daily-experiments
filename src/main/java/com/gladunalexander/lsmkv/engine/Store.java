@@ -1,0 +1,23 @@
+package com.gladunalexander.lsmkv.engine;
+
+import java.util.Optional;
+
+/**
+ * The key-value storage engine contract.
+ *
+ * <p>Keys are lowercase ASCII strings, values are ASCII strings. The contract is
+ * intentionally small and stable; later weeks of the series grow it (delete in
+ * week 4, scan in week 5) but the core stays the same.
+ */
+public interface Store {
+
+    /**
+     * Stores a key-value pair. If the key already exists its value is overwritten.
+     */
+    void put(String key, String value);
+
+    /**
+     * Returns the value associated with the key, or empty if the key is absent.
+     */
+    Optional<String> get(String key);
+}

@@ -1,5 +1,6 @@
 HELP.md
 target/
+lsmkv-data/
 maven-wrapper.jar
 !**/src/main/**
 !**/src/test/**
