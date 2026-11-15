@@ -1,0 +1,30 @@
+# Hands factory events to the reusable workflow in giova333/software-factory.
+name: factory
+
+on:
+  issues:
+    types: [labeled]
+  issue_comment:
+    types: [created]
+  pull_request_review:
+    types: [submitted]
+
+permissions:
+  contents: read
+  packages: read   # lets the factory pull its image if it is private
+
+jobs:
+  factory:
+    # Cheap pre-filter so ordinary comments don't start a runner. The factory re-checks everything.
+    if: >-
+      (github.event_name == 'issues' && github.event.label.name == 'factory') ||
+      (github.event_name == 'issue_comment' && startsWith(github.event.comment.body, '/factory')) ||
+      (github.event_name == 'pull_request_review' && github.event.review.state == 'changes_requested' &&
+       startsWith(github.event.pull_request.head.ref, 'factory/'))
+    uses: giova333/software-factory/.github/workflows/factory.yml@main
+    with:
+      allowed_users: giova333
+    secrets:
+      anthropic_api_key: ${{ secrets.ANTHROPIC_API_KEY }}
+      app_id: ${{ secrets.FACTORY_APP_ID }}
+      app_private_key: ${{ secrets.FACTORY_APP_PRIVATE_KEY }}
