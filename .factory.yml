@@ -4,7 +4,7 @@ harness: claude-code
 model: claude-sonnet-5-5
 allowed_users: [giova333]   # who may trigger it (overridden by the workflow input or FACTORY_ALLOWED_USERS)
 skills: []                  # e.g. github:mattpocock/skills@<40-char-sha>#skills/engineering/tdd
-setup: mvn -B -q dependency:go-offline
+setup: mvn -B -ntp dependency:go-offline   # .mvn/maven.config sets 60 s download timeouts with retries
 test: mvn -B -q test        # compiles everything and runs tests under src/test/java
 limits:
   timeout_minutes: 30
